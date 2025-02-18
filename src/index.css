@@ -1,0 +1,68 @@
+.table-container table {
+  /* ... vorherige Stile ... */
+  font-size: 0.85em; /* Verkleinert die Schriftgröße etwas für mehr Inhalt pro Bildschirm */
+  line-height: 1.3;   /* Zeilenhöhe leicht reduzieren für kompaktere Darstellung */
+  /*table-layout: fixed; /* Wichtig für gleichmäßige Spaltenbreiten und `word-break` */
+}
+
+.table-container th,
+.table-container td {
+  border: 1px solid #ddd; /* Leichte Rahmenlinien für bessere Abgrenzung */
+  padding: 6px;          /* Angenehmer Innenabstand in den Zellen */
+  text-align: left;      /* Text linksbündig ausrichten für bessere Lesbarkeit in den meisten Sprachen */
+  word-break: break-word; /* Lange Wörter innerhalb der Zelle umbrechen */
+  white-space: normal; /* Textumbruch in Zellen aktivieren (wichtig!) */
+  overflow: hidden;     /* Überlaufenden Inhalt ausblenden (optional, für sauberes Umbrechen) */
+  text-overflow: ellipsis; /* Bei abgeschnittenem Text Ellipsis anzeigen (optional) */
+}
+
+.table-container th {
+  background-color: #f0f0f0; /* Hintergrundfarbe für Tabellenüberschriften zur besseren Unterscheidung */
+  font-weight: bold;       /* Überschriften fett darstellen */
+  white-space: normal; /* Textumbruch in Überschriften aktivieren (wichtig!) */
+}
+
+/* Optionale Anpassung der Spaltenbreite (Beispiel für die erste Spalte) */
+.table-container th:nth-child(1), /* Erste Spalte (z.B. 'gtin') Header */
+.table-container td:nth-child(1)  /* Erste Spalte (z.B. 'gtin') Datenzellen */
+{
+  width: 60px; /* Beispielbreite für die erste Spalte, anpassen nach Bedarf */
+  min-width: 60px; /* Mindestbreite, damit der Inhalt nicht zu sehr gequetscht wird */
+}
+
+/* ... (Sie können hier weitere `:nth-child(n)` Regeln für andere Spalten hinzufügen, um deren Breite anzupassen) ... */
+
+.table-container tbody tr:nth-child(even) { /* Jede zweite Zeile im tbody */
+  background-color: #f9f9f9; /* Leichte Hintergrundfarbe für gerade Zeilen */
+}
+
+.table-container thead {
+  position: sticky;   /* Überschriften "sticky" machen */
+  top: 0;             /* Am oberen Rand des Containers "kleben" */
+  background-color: #f0f0f0; /* Hintergrundfarbe beibehalten oder anpassen */
+  z-index: 10;          /* Sicherstellen, dass Überschriften über dem Tabelleninhalt liegen */
+}
+
+/* Falls nötig, Rahmen für sticky Header anpassen, um Überlappung zu vermeiden */
+.table-container thead th {
+  border-bottom: 1px solid #ddd; /* Rahmen unten, falls er durch 'sticky' verloren geht */
+}
+
+.gtin-dropdown {
+  margin-left: 10px; /* Abstand zum Filter-Input (oder nach Bedarf) */
+  padding: 8px;
+  border: 1px solid #ccc;
+  border-radius: 4px;
+  font-size: 0.9em;
+}
+
+.changes-filter-label {
+  margin-left: 15px; /* Abstand zum GTIN-Dropdown (oder nach Bedarf) */
+  display: flex;      /* Für einfache vertikale Zentrierung von Checkbox und Text */
+  align-items: center;
+  font-size: 0.9em;
+}
+
+.changes-filter-checkbox {
+  margin-right: 5px; /* Abstand zwischen Checkbox und Text */
+}

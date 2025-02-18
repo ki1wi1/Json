@@ -1,0 +1,493 @@
+import React, { useState, useRef, useEffect } from 'react';
+import './index.css';
+import FileUpload from './FileUpload';
+import initSqlJs from 'sql.js';
+
+// ** Globale Variablen und Hilfsfunktionen **
+let dbInstance = null; // Globale Datenbankinstanz
+const DB_NAME = 'SqliteStorage'; // Name der IndexedDB-Datenbank
+const STORE_NAME = 'sqliteDB'; // Object Store Name
+const DB_KEY = 'database'; // Schlüssel, unter dem die Datenbank gespeichert wird
+
+// IndexedDB Hilfsfunktionen
+const openIndexedDB = () => {
+  return new Promise((resolve, reject) => {
+    const request = indexedDB.open(DB_NAME, 1);
+
+    request.onerror = () => reject(request.error);
+    request.onsuccess = () => resolve(request.result);
+
+    request.onupgradeneeded = (event) => {
+      const db = event.target.result;
+      if (!db.objectStoreNames.contains(STORE_NAME)) {
+        db.createObjectStore(STORE_NAME);
+      }
+    };
+  });
+};
+
+const saveToIndexedDB = async (sqliteDB) => {
+  try {
+    const data = sqliteDB.export(); // Uint8Array
+    const idb = await openIndexedDB();
+
+    return new Promise((resolve, reject) => {
+      const transaction = idb.transaction(STORE_NAME, 'readwrite');
+      const store = transaction.objectStore(STORE_NAME);
+      const request = store.put(data, DB_KEY);
+
+      request.onsuccess = () => resolve();
+      request.onerror = () => reject(request.error);
+    });
+  } catch (error) {
+    console.error('Failed to save to IndexedDB:', error);
+    throw error;
+  }
+};
+
+const loadFromIndexedDB = async () => {
+  try {
+    const idb = await openIndexedDB();
+
+    return new Promise((resolve, reject) => {
+      const transaction = idb.transaction(STORE_NAME, 'readonly');
+      const store = transaction.objectStore(STORE_NAME);
+      const request = store.get(DB_KEY);
+
+      request.onsuccess = () => resolve(request.result);
+      request.onerror = () => reject(request.error);
+    });
+  } catch (error) {
+    console.error('Failed to load from IndexedDB:', error);
+    throw error;
+  }
+};
+
+const clearIndexedDB = async () => {
+  try {
+    const idb = await openIndexedDB();
+
+    return new Promise((resolve, reject) => {
+      const transaction = idb.transaction(STORE_NAME, 'readwrite');
+      const store = transaction.objectStore(STORE_NAME);
+      const request = store.delete(DB_KEY);
+
+      request.onsuccess = () => resolve();
+      request.onerror = () => reject(request.error);
+    });
+  } catch (error) {
+    console.error('Failed to clear IndexedDB:', error);
+    throw error;
+  }
+};
+
+// ** Datenbankinitialisierung mit IndexedDB-Persistenz **
+const initializeDB = async () => {
+  if (!dbInstance) {
+    try {
+      const SQL = await initSqlJs({ locateFile: file => `/sql-wasm.wasm` });
+      const savedData = await loadFromIndexedDB();
+
+      if (savedData) {
+        // Falls die gespeicherten Daten kein Uint8Array sind, konvertieren wir sie
+        const dataArray = savedData instanceof Uint8Array ? savedData : new Uint8Array(savedData);
+        dbInstance = new SQL.Database(dataArray);
+        console.log('Datenbank erfolgreich aus IndexedDB geladen.');
+      } else {
+        dbInstance = new SQL.Database();
+        console.log('Keine gespeicherten Daten in IndexedDB gefunden. Neue Datenbank erstellt.');
+      }
+      // Unabhängig vom Startzustand sicherstellen, dass die Tabelle existiert
+      await createTable(dbInstance);
+      return dbInstance;
+    } catch (error) {
+      console.error('Database initialization failed:', error);
+      throw new Error('Failed to initialize database');
+    }
+  }
+  return dbInstance;
+};
+
+// ** Tabelle erstellen (falls nicht vorhanden) und DB speichern **
+const createTable = async (db) => {
+  try {
+    db.run(`
+      CREATE TABLE IF NOT EXISTS jsonData (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        tm TEXT,
+        gln TEXT,
+        gtin TEXT,
+        tics TEXT,
+        json_data TEXT
+      )
+    `);
+    console.log('jsonData Tabelle erstellt (oder bereits vorhanden). Speichere Datenbank in IndexedDB...');
+    await saveToIndexedDB(db);
+    console.log('Datenbank nach Tabellenerstellung in IndexedDB gespeichert.');
+  } catch (error) {
+    console.error('Table creation failed:', error);
+    throw new Error('Failed to create table');
+  }
+};
+
+// ** Daten speichern **
+const saveData = async (tm, gln, gtin, tics, jsonDataString) => {
+  try {
+    const db = await initializeDB();
+    db.run(`
+      INSERT INTO jsonData (tm, gln, gtin, tics, json_data)
+      VALUES (?, ?, ?, ?, ?)
+    `, [tm, gln, gtin, tics, jsonDataString]);
+    await saveToIndexedDB(db);
+    return true;
+  } catch (error) {
+    console.error('Data save failed:', error);
+    throw new Error('Failed to save data');
+  }
+};
+
+// ** Daten laden **
+const loadData = async () => {
+  try {
+    const db = await initializeDB();
+    const result = db.exec("SELECT json_data FROM jsonData");
+    if (result && result[0] && result[0].values) {
+      return result[0].values.map(row => JSON.parse(row[0]));
+    }
+    return [];
+  } catch (error) {
+    console.error('Data load failed:', error);
+    throw new Error('Failed to load data');
+  }
+};
+
+const clearAllData = async () => {
+  try {
+    await clearIndexedDB();
+    dbInstance = null;
+    await initializeDB();
+    return true;
+  } catch (error) {
+    console.error('Failed to clear data:', error);
+    throw new Error('Failed to clear data');
+  }
+};
+
+function App() {
+  // ** Hilfsfunktionen, die innerhalb der App benötigt werden **
+  const getUniqueGtinValues = (currentData) => {
+    const gtinValues = new Set();
+    currentData.forEach(group => {
+      gtinValues.add(group.gtin);
+    });
+    return Array.from(gtinValues).sort();
+  };
+
+  const hasPropertyDifferences = (group, sortedPropertyHeaders) => {
+    if (group.ticsData.length <= 1) {
+      return false;
+    }
+    for (const header of sortedPropertyHeaders) {
+      const [mNumber, propertyName] = header.split(' - ');
+      const propertyValues = group.ticsData.map(ticsEntry => {
+        const property = ticsEntry.properties.find(prop => prop['m-number'] === mNumber);
+        return property ? property[propertyName] : undefined;
+      });
+      const firstValue = propertyValues.find(val => val !== undefined);
+      if (firstValue === undefined) continue;
+      for (let i = 1; i < propertyValues.length; i++) {
+        if (propertyValues[i] !== undefined && propertyValues[i] !== firstValue) {
+          return true;
+        }
+      }
+    }
+    return false;
+  };
+
+  const [data, setData] = useState([]);
+  const [error, setError] = useState(null);
+  const [filterText, setFilterText] = useState('');
+  const [uploadProgress, setUploadProgress] = useState(0);
+  const [isDragging, setIsDragging] = useState(false);
+  const dropRef = useRef(null);
+
+  const [selectedGtin, setSelectedGtin] = useState('');
+  const uniqueGtinValues = getUniqueGtinValues(data);
+  const [changesFilterActive, setChangesFilterActive] = useState(false);
+
+  // DB-Initialisierung und Laden der Daten beim Start
+  useEffect(() => {
+    const initializeAndLoad = async () => {
+      try {
+        await initializeDB();
+        const loadedData = await loadData();
+        setData(loadedData);
+      } catch (initError) {
+        setError(initError.message);
+        console.error('Error initializing database or loading data:', initError);
+      }
+    };
+    initializeAndLoad();
+  }, []);
+
+  const handleFileSelect = async (jsonData, progress) => {
+    if (jsonData && typeof jsonData === 'object' && Object.keys(jsonData).length > 0) {
+      try {
+        const { tm, gln, gtin, tics } = jsonData;
+        const properties = jsonData.properties || [];
+        const transformedProperties = properties.map(property => {
+          const valuesObject = {};
+          if (Array.isArray(property.values)) {
+            property.values.forEach(val => {
+              valuesObject[val.name] = val.value;
+            });
+          } else if (typeof property.values === 'object') {
+            Object.entries(property.values).forEach(([key, val]) => {
+              valuesObject[key] = val;
+            });
+          }
+          return {
+            "m-number": property["m-number"],
+            ...valuesObject
+          };
+        });
+
+        const newDataEntry = {
+          tics: tics,
+          properties: transformedProperties
+        };
+
+        setData(prevData => {
+          const existingGroupIndex = prevData.findIndex(group =>
+            group.tm === tm && group.gln === gln && group.gtin === gtin
+          );
+
+          if (existingGroupIndex !== -1) {
+            const updatedData = [...prevData];
+            const existingGroup = updatedData[existingGroupIndex];
+            const ticsExists = existingGroup.ticsData.some(data => data.tics === tics);
+            if (!ticsExists) {
+              updatedData[existingGroupIndex] = {
+                ...existingGroup,
+                ticsData: [...existingGroup.ticsData, newDataEntry]
+              };
+              return updatedData;
+            } else {
+              console.log(`Datensatz mit tics ${tics} für tm/gln/gtin ${tm}/${gln}/${gtin} existiert bereits und wird nicht hinzugefügt.`);
+              return prevData;
+            }
+          } else {
+            const newGroup = {
+              tm: tm,
+              gln: gln,
+              gtin: gtin,
+              ticsData: [newDataEntry]
+            };
+            return [...prevData, newGroup];
+          }
+        });
+
+        setError(null);
+
+        // Daten in die SQLite-Datenbank speichern
+        try {
+          await saveData(tm, gln, gtin, tics, JSON.stringify(jsonData));
+          console.log(`Daten für tm/gln/gtin ${tm}/${gln}/${gtin} und tics ${tics} in SQLite gespeichert.`);
+        } catch (dbError) {
+          console.error('Fehler beim Speichern der Daten in SQLite:', dbError);
+        }
+      } catch (e) {
+        console.error("Fehler bei der Umwandlung der Daten:", e);
+        setError("Fehler beim Verarbeiten der JSON-Datei.");
+      }
+    } else {
+      setData([]);
+      setError("Ungültiges JSON-Format. Bitte überprüfen Sie die Datei.");
+    }
+    setUploadProgress(progress);
+  };
+
+  const filteredData = data.filter(group => {
+    const gtinFilterActive = selectedGtin !== '';
+    const gtinMatch = !gtinFilterActive || group.gtin === selectedGtin;
+
+    const textFilterActive = filterText !== '';
+    const textMatch = !textFilterActive || Object.values(group).some(value =>
+      value?.toString().toLowerCase().includes(filterText.toLowerCase()) ||
+      (Array.isArray(value) && value.some(prop => Object.values(prop).some(v => v?.toString().toLowerCase().includes(filterText.toLowerCase()))))
+    );
+
+    const allPropertyHeaders = new Set();
+    data.forEach(group => {
+      group.ticsData.forEach(ticsEntry => {
+        if (ticsEntry.properties) {
+          ticsEntry.properties.forEach(property => {
+            Object.keys(property)
+              .filter(key => key !== 'm-number')
+              .forEach(key => {
+                allPropertyHeaders.add(`${property['m-number']} - ${key}`);
+              });
+          });
+        }
+      });
+    });
+    const sortedPropertyHeaders = Array.from(allPropertyHeaders).sort();
+
+    const changesFilterCondition = !changesFilterActive || hasPropertyDifferences(group, sortedPropertyHeaders);
+
+    return gtinMatch && textMatch && changesFilterCondition;
+  });
+
+  const handleDragEnter = (e) => {
+    e.preventDefault();
+    setIsDragging(true);
+  };
+
+  const handleDragLeave = (e) => {
+    e.preventDefault();
+    setIsDragging(false);
+  };
+
+  const handleDragOver = (e) => {
+    e.preventDefault();
+    setIsDragging(false);
+  };
+
+  const handleDrop = (e) => {
+    e.preventDefault();
+    setIsDragging(false);
+
+    const files = Array.from(e.dataTransfer.files);
+
+    files.forEach(file => {
+      if (file && file.type === 'application/json') {
+        const reader = new FileReader();
+        reader.onload = (event) => {
+          try {
+            const jsonData = JSON.parse(event.target.result);
+            handleFileSelect(jsonData, 100);
+          } catch (error) {
+            console.error('Ungültige JSON-Datei:', error);
+            setError('Bitte wähle eine gültige JSON-Datei aus.');
+          }
+        };
+        reader.readAsText(file);
+      } else if (file) {
+        setError('Bitte wähle JSON-Dateien aus.');
+      }
+    });
+  };
+
+  const renderTable = () => {
+    if (filteredData.length === 0) {
+      return <p>Keine Daten vorhanden.</p>;
+    }
+
+    const allPropertyHeaders = new Set();
+    filteredData.forEach(group => {
+      group.ticsData.forEach(ticsEntry => {
+        if (ticsEntry.properties) {
+          ticsEntry.properties.forEach(property => {
+            Object.keys(property)
+              .filter(key => key !== 'm-number')
+              .forEach(key => {
+                allPropertyHeaders.add(`${property['m-number']} - ${key}`);
+              });
+          });
+        }
+      });
+    });
+    const sortedPropertyHeaders = Array.from(allPropertyHeaders).sort();
+
+    return (
+      <table>
+        <thead>
+          <tr>
+            <th>TM</th>
+            <th>GLN</th>
+            <th>GTIN</th>
+            <th>TICS</th>
+            <th>Änderungen</th>
+            {sortedPropertyHeaders.map(header => <th key={header}>{header}</th>)}
+          </tr>
+        </thead>
+        <tbody>
+          {filteredData.map(group => {
+            const changesDetected = hasPropertyDifferences(group, sortedPropertyHeaders);
+
+            return group.ticsData.map((ticsEntry, index) => (
+              <tr key={`${group.tm}-${group.gln}-${group.gtin}-${ticsEntry.tics}-${index}`}>
+                {index === 0 && (<>
+                  <td rowSpan={group.ticsData.length}>{group.tm}</td>
+                  <td rowSpan={group.ticsData.length}>{group.gln}</td>
+                  <td rowSpan={group.ticsData.length}>{group.gtin}</td>
+                </>)}
+                <td>{ticsEntry.tics}</td>
+                {index === 0 && (
+                  <td rowSpan={group.ticsData.length}>{changesDetected ? 'Ja' : 'Nein'}</td>
+                )}
+                {sortedPropertyHeaders.map(header => {
+                  const [mNumber, propertyName] = header.split(' - ');
+                  const property = ticsEntry.properties.find(prop => prop['m-number'] === mNumber);
+                  const cellValue = property ? property[propertyName] : '';
+                  return <td key={`${ticsEntry.tics}-${header}`}>{String(cellValue)}</td>;
+                })}
+              </tr>
+            ));
+          })}
+        </tbody>
+      </table>
+    );
+  };
+
+  return (
+    <div className="App">
+      <h1>JSON Daten Tabelle</h1>
+
+      <div className="upload-area"
+           onDragEnter={handleDragEnter}
+           onDragLeave={handleDragLeave}
+           onDragOver={handleDragOver}
+           onDrop={handleDrop}
+           ref={dropRef}>
+        <FileUpload onFileSelect={handleFileSelect} />
+        {isDragging && <div className="drag-overlay">Datei hier loslassen!</div>}
+      </div>
+
+      {uploadProgress > 0 && (
+        <div className="progress-bar">
+          <div className="progress" style={{ width: `${uploadProgress}%` }}></div>
+        </div>
+      )}
+
+      {error && <p className="error-message">{error}</p>}
+
+      <div className="filter-sort">
+        <input type="text" placeholder="Filtern..." value={filterText} onChange={e => setFilterText(e.target.value)} />
+        <select
+          value={selectedGtin}
+          onChange={e => setSelectedGtin(e.target.value)}
+          className="gtin-dropdown">
+          <option value="">Alle GTINs</option>
+          {uniqueGtinValues.map(gtin => (
+            <option key={gtin} value={gtin}>{gtin}</option>
+          ))}
+        </select>
+        <label className="changes-filter-label">
+          <input
+            type="checkbox"
+            checked={changesFilterActive}
+            onChange={e => setChangesFilterActive(e.target.checked)}
+            className="changes-filter-checkbox" />
+          Nur Änderungen anzeigen
+        </label>
+      </div>
+
+      <div className="table-container">
+        {data.length > 0 ? renderTable() : <p>{error ? "" : "Bitte laden Sie eine JSON-Datei hoch."}</p>}
+      </div>
+    </div>
+  );
+}
+
+export default App;
