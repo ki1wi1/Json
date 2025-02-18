@@ -8,5 +8,5 @@ import App from './App.jsx' // App Komponente auskommentiert, da wir DatabasePer
 const root = createRoot(document.getElementById('root')); // Korrigiert!
 
 root.render(
-    <App /> // Testkomponente rendern
+<App /> // Testkomponente rendern
 );
